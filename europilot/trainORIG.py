@@ -22,8 +22,6 @@ from europilot.exceptions import TrainException
 from europilot.screen import stream_local_game_screen
 from europilot.controllerstate import ControllerOutput
 
-from random import *
-
 
 class _ConfigType(type):
     def __getattr__(self, attr):
@@ -99,8 +97,6 @@ class Worker(multiprocessing.Process):
                 filename = self._save_image(image_data)
 
                 #lzhang02
-                self.give_array(image_data)
-
                 self._outq.put((filename, sensor_data))
             except KeyboardInterrupt:
                 pass
@@ -119,13 +115,6 @@ class Worker(multiprocessing.Process):
         image.save(os.path.join(self._img_path, filename))
         return filename
 
-    def give_array(self, image_data):
-        """Returns the array.
-        :param image_data: RGB numpy array
-
-        """
-        return image_data
-
 
 class Writer(multiprocessing.Process):
     def __init__(self, train_uid, inq, csv_initialized=False):
@@ -143,28 +132,26 @@ class Writer(multiprocessing.Process):
 
     def run(self):
         f = os.path.join(self._data_path, self._filename)
-        #lzhang02: DISABLING CSVS
-        # with open(f, 'a' if os.path.isfile(f) else 'w') as file_:
-        #     while True:
-        #         try:
-        #             data = self._inq.get()
-        #             if data == _WORKER_BREAK_FLAG:
-        #                 break
-        #             image_filename, sensor_data = data
-        #
-        #             self._write(file_, image_filename, sensor_data)
-        #
-        #             #lzhang02: disabling this print, to re-enable change multiply to mod
-        #             if self._data_seq * 10 == 0:
-        #                 _print('seq: %s, filename: %s, datetime: %s' %
-        #                     (
-        #                         self._data_seq,
-        #                         image_filename,
-        #                         str(datetime.datetime.now())
-        #                     )
-        #                 )
-        #         except KeyboardInterrupt:
-        #             pass
+        with open(f, 'a' if os.path.isfile(f) else 'w') as file_:
+            while True:
+                try:
+                    data = self._inq.get()
+                    if data == _WORKER_BREAK_FLAG:
+                        break
+                    image_filename, sensor_data = data
+
+                    self._write(file_, image_filename, sensor_data)
+
+                    if self._data_seq % 10 == 0:
+                        _print('seq: %s, filename: %s, datetime: %s' %
+                            (
+                                self._data_seq,
+                                image_filename,
+                                str(datetime.datetime.now())
+                            )
+                        )
+                except KeyboardInterrupt:
+                    pass
 
     def _write(self, file_, image_filename, sensor_data):
         """Synchronously write sensor data to disk.
@@ -180,17 +167,15 @@ class Writer(multiprocessing.Process):
         """
         if not self._csv_initialized:
             # Add headers
-            #lzhang02: DISABLE THE CSV
-            # sensor_header = ','.join(sensor_data.raw.keys())
-            # csv_header = 'img,' + sensor_header
-            # file_.write(csv_header + '\n')
-            # self._csv_initialized = True
-            0
+            sensor_header = ','.join(sensor_data.raw.keys())
+            csv_header = 'img,' + sensor_header
+            file_.write(csv_header + '\n')
+            self._csv_initialized = True
 
         values = [image_filename] + [str(x) for x in sensor_data.raw.values()]
         data = ','.join(values)
         self._data_seq += 1
-        # file_.write(data + '\n')
+        file_.write(data + '\n')
 
 
 _train_sema = threading.BoundedSemaphore(value=1)
@@ -203,8 +188,6 @@ def generate_training_data(config=Config):
     :param config: Training configuration class
 
     """
-    counter = 0
-
     try:
         # Set global config so that other workers can access it directly.
         global _global_config
@@ -270,11 +253,9 @@ def generate_training_data(config=Config):
             _train_sema.acquire()
 
         while True:
-
             if flow_controller.acquired:
                 # Switch context and give flow_controller time to acquire sema.
                 time.sleep(0.1)
-
 
             # TODO: Do something to resolve this in python 2.x
             # https://bugs.python.org/issue8844
@@ -289,23 +270,16 @@ def generate_training_data(config=Config):
 
             sensor_data = controller_output.get_latest_state_obj()
             last_sensor_data = sensor_data
-            #lzhang02: only print the array, image sample every x
+            #lzhang02: commenting this out to only extract the array
+            worker_q.put((image_data, sensor_data))
+            print('IMAGE DATA', image_data)
 
-            if random() > .0098:
-                worker_q.put((image_data, sensor_data))
 
-            # print(image_data)
-            # print(type(image_data))
 
             try:
                 _train_sema.release()
             except ValueError:
                 pass
-
-            return image_data
-
-
-
     except KeyboardInterrupt:
         try:
             _train_sema.release()
@@ -327,14 +301,8 @@ def generate_training_data(config=Config):
         for worker in workers:
             worker.join()
 
-        print('END FUNCTION')
-
         writer.terminate()
         writer.join()
-
-    print('END FUNCTION FINAL')
-
-
 
 
 def _feed_control_signal(q, key_value=None, sensor_data=None):
